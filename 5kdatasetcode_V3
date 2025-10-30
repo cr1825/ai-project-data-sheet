@@ -313,9 +313,9 @@ print("\n" + "="*60)
 print("🤖 INTERACTIVE ROBOT MOTION PREDICTION INTERFACE")
 print("="*60)
 
-# Get available options from data
+# Get available options from data - FIXED: Use integers 1-6 for Joint IDs
 available_robots = sorted(data['Robot_Model'].unique())
-available_joints = sorted(data['Joint_ID'].unique())
+available_joints = list(range(1, 7))  # Force integers 1 to 6
 available_motion_types = sorted(data['Motion_Type'].unique())
 
 # Output widget
@@ -356,7 +356,7 @@ prediction_type = widgets.Dropdown(
 
 joint_id = widgets.Dropdown(
     options=available_joints,
-    value=available_joints[0],
+    value=1,
     description='Joint ID:',
     style={'description_width': '150px'},
     layout=widgets.Layout(width='400px')
@@ -412,7 +412,7 @@ joints_display = widgets.HTML(
 info_box = widgets.HTML(
     value="<div style='background-color: #E3F2FD; padding: 10px; border-radius: 5px; margin: 10px 0;'>"
           "<b>ℹ️ Info:</b> Select Robot Model and Motion Type. Pick/Place predict <b>Position</b>, "
-          "Weld/Inspect predict <b>Velocity</b>. Add joints to calculate task time.</div>"
+          "Weld/Inspect predict <b>Velocity</b>. Add joints (1-6) to calculate task time.</div>"
 )
 
 # Update prediction type based on motion type
@@ -426,13 +426,13 @@ def update_prediction_type(change):
         prediction_type.options = ['Position Prediction']
         info_box.value = ("<div style='background-color: #E3F2FD; padding: 10px; border-radius: 5px; margin: 10px 0;'>"
                          "<b>🎯 Pick & Place Motion:</b> This motion focuses on accurate <b>positioning</b>. "
-                         "Add joints to calculate movement time.</div>")
+                         "Add joints (1-6) to calculate movement time.</div>")
     else:  # Weld & Inspect
         prediction_type.value = 'Velocity Prediction'
         prediction_type.options = ['Velocity Prediction']
         info_box.value = ("<div style='background-color: #FFF3E0; padding: 10px; border-radius: 5px; margin: 10px 0;'>"
                          "<b>⚡ Weld & Inspect Motion:</b> This motion requires precise <b>velocity control</b>. "
-                         "Add joints to calculate movement time.</div>")
+                         "Add joints (1-6) to calculate movement time.</div>")
 
 motion_type.observe(update_prediction_type, names='value')
 
@@ -474,12 +474,15 @@ def add_joint_movement(b):
         # Encode robot model for prediction
         robot_model_encoded = robot_encoder.transform([robot_model.value])[0]
         
+        # Ensure joint_id is an integer
+        joint_id_int = int(joint_id.value)
+        
         # Make prediction
         if motion_type.value == 'Pick & Place':
             input_data = pd.DataFrame({
                 'Desired_Position': [desired_position.value],
                 'Desired_Velocity': [desired_velocity.value],
-                'Joint_ID': [joint_id.value],
+                'Joint_ID': [joint_id_int],
                 'Robot_Model_Encoded': [robot_model_encoded]
             })
             predicted_pos = rf_position.predict(input_data)[0]
@@ -488,7 +491,7 @@ def add_joint_movement(b):
             input_data = pd.DataFrame({
                 'Desired_Position': [desired_position.value],
                 'Desired_Velocity': [desired_velocity.value],
-                'Joint_ID': [joint_id.value],
+                'Joint_ID': [joint_id_int],
                 'Robot_Model_Encoded': [robot_model_encoded]
             })
             predicted_vel = rf_velocity.predict(input_data)[0]
@@ -498,7 +501,7 @@ def add_joint_movement(b):
         movement = {
             'robot_model': robot_model.value,
             'motion_type': motion_type.value,
-            'joint_id': joint_id.value,
+            'joint_id': joint_id_int,
             'current_pos': current_position.value,
             'target_pos': predicted_pos,
             'velocity': abs(predicted_vel) if predicted_vel != 0 else 1.0
@@ -507,7 +510,7 @@ def add_joint_movement(b):
         
         update_joints_display()
         
-        print(f"✅ Added Joint {joint_id.value} movement to queue!")
+        print(f"✅ Added Joint {joint_id_int} movement to queue!")
         print(f"   Robot Model: {robot_model.value}")
         print(f"   Motion Type: {motion_type.value}")
         print(f"   Current: {current_position.value:.2f}° → Target: {predicted_pos:.2f}°")
@@ -631,4 +634,4 @@ main_interface = widgets.VBox([
 display(main_interface)
 
 print("\n✨ Interactive interface ready!")
-print("💡 Select Robot Model and Motion Type, then add joints to calculate task time.")
+print("💡 Select Robot Model and Motion Type, then add joints (1-6) to calculate task time.")
