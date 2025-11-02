@@ -22,7 +22,7 @@ print("Columns:", data.columns.tolist())
 required_cols = ["Motion_Type", "Robot_Model"]
 missing_cols = [col for col in required_cols if col not in data.columns]
 if missing_cols:
-    print(f"\n⚠️ Missing columns: {missing_cols}")
+    print(f"\n⚠ Missing columns: {missing_cols}")
     print("Available columns:", data.columns.tolist())
 else:
     print(f"\n📋 Available Robot Models: {sorted(data['Robot_Model'].unique())}")
@@ -33,7 +33,6 @@ else:
 # ===========================
 # 2️⃣ Encode Categorical Variables
 # ===========================
-# Create label encoder for Robot_Model
 robot_encoder = LabelEncoder()
 data['Robot_Model_Encoded'] = robot_encoder.fit_transform(data['Robot_Model'])
 
@@ -44,10 +43,7 @@ for i, model in enumerate(robot_encoder.classes_):
 # ===========================
 # 3️⃣ Separate Data by Motion Type
 # ===========================
-# Model 1: Pick & Place → Position Accuracy
 pick_place_data = data[data['Motion_Type'].isin(['Pick', 'Place'])].copy()
-
-# Model 2: Weld & Inspect → Velocity Accuracy
 weld_inspect_data = data[data['Motion_Type'].isin(['Weld', 'Inspect'])].copy()
 
 print(f"\n📊 Data Distribution:")
@@ -61,16 +57,13 @@ print("\n" + "="*60)
 print("🎯 MODEL 1: POSITION ACCURACY (Pick & Place Tasks)")
 print("="*60)
 
-# Prepare features and target - use encoded Robot_Model
 X_position = pick_place_data[['Desired_Position', 'Desired_Velocity', 'Joint_ID', 'Robot_Model_Encoded']]
 y_position = pick_place_data['Actual_Position']
 
-# Train-test split
 X_pos_train, X_pos_test, y_pos_train, y_pos_test = train_test_split(
     X_position, y_position, test_size=0.2, random_state=42
 )
 
-# Train Random Forest for Position
 print("\n🚀 Training Position Prediction Model...")
 rf_position = RandomForestRegressor(
     n_estimators=300, 
@@ -80,11 +73,9 @@ rf_position = RandomForestRegressor(
 )
 rf_position.fit(X_pos_train, y_pos_train)
 
-# Predictions
 y_pos_train_pred = rf_position.predict(X_pos_train)
 y_pos_test_pred = rf_position.predict(X_pos_test)
 
-# Metrics for Position Model
 r2_pos_train = r2_score(y_pos_train, y_pos_train_pred)
 r2_pos_test = r2_score(y_pos_test, y_pos_test_pred)
 rmse_pos_train = np.sqrt(mean_squared_error(y_pos_train, y_pos_train_pred))
@@ -100,7 +91,6 @@ print(f"    • R² Score: {r2_pos_test:.4f}")
 print(f"    • RMSE: {rmse_pos_test:.4f}")
 print(f"    • MAE: {mae_pos_test:.4f}")
 
-# Feature importance for Position Model
 feature_importance_pos = pd.DataFrame({
     'Feature': ['Desired_Position', 'Desired_Velocity', 'Joint_ID', 'Robot_Model'],
     'Importance': rf_position.feature_importances_
@@ -115,16 +105,13 @@ print("\n" + "="*60)
 print("⚡ MODEL 2: VELOCITY ACCURACY (Weld & Inspect Tasks)")
 print("="*60)
 
-# Prepare features and target - use encoded Robot_Model
 X_velocity = weld_inspect_data[['Desired_Position', 'Desired_Velocity', 'Joint_ID', 'Robot_Model_Encoded']]
 y_velocity = weld_inspect_data['Actual_Velocity']
 
-# Train-test split
 X_vel_train, X_vel_test, y_vel_train, y_vel_test = train_test_split(
     X_velocity, y_velocity, test_size=0.2, random_state=42
 )
 
-# Train Random Forest for Velocity
 print("\n🚀 Training Velocity Prediction Model...")
 rf_velocity = RandomForestRegressor(
     n_estimators=300, 
@@ -134,11 +121,9 @@ rf_velocity = RandomForestRegressor(
 )
 rf_velocity.fit(X_vel_train, y_vel_train)
 
-# Predictions
 y_vel_train_pred = rf_velocity.predict(X_vel_train)
 y_vel_test_pred = rf_velocity.predict(X_vel_test)
 
-# Metrics for Velocity Model
 r2_vel_train = r2_score(y_vel_train, y_vel_train_pred)
 r2_vel_test = r2_score(y_vel_test, y_vel_test_pred)
 rmse_vel_train = np.sqrt(mean_squared_error(y_vel_train, y_vel_train_pred))
@@ -154,7 +139,6 @@ print(f"    • R² Score: {r2_vel_test:.4f}")
 print(f"    • RMSE: {rmse_vel_test:.4f}")
 print(f"    • MAE: {mae_vel_test:.4f}")
 
-# Feature importance for Velocity Model
 feature_importance_vel = pd.DataFrame({
     'Feature': ['Desired_Position', 'Desired_Velocity', 'Joint_ID', 'Robot_Model'],
     'Importance': rf_velocity.feature_importances_
@@ -186,7 +170,6 @@ print("\n" + summary_table.to_string(index=False))
 # ===========================
 fig, axes = plt.subplots(2, 2, figsize=(14, 10))
 
-# Plot 1: Position Model - Actual vs Predicted
 axes[0, 0].scatter(y_pos_test, y_pos_test_pred, alpha=0.5, s=20)
 axes[0, 0].plot([y_pos_test.min(), y_pos_test.max()], 
                 [y_pos_test.min(), y_pos_test.max()], 'r--', lw=2)
@@ -196,7 +179,6 @@ axes[0, 0].set_title(f'Position Model (Pick/Place)\nR²={r2_pos_test:.4f}',
                      fontsize=12, fontweight='bold')
 axes[0, 0].grid(alpha=0.3)
 
-# Plot 2: Position Model - Residuals
 residuals_pos = y_pos_test - y_pos_test_pred
 axes[0, 1].scatter(y_pos_test_pred, residuals_pos, alpha=0.5, s=20)
 axes[0, 1].axhline(y=0, color='r', linestyle='--', lw=2)
@@ -206,7 +188,6 @@ axes[0, 1].set_title(f'Position Model Residuals\nRMSE={rmse_pos_test:.4f}',
                      fontsize=12, fontweight='bold')
 axes[0, 1].grid(alpha=0.3)
 
-# Plot 3: Velocity Model - Actual vs Predicted
 axes[1, 0].scatter(y_vel_test, y_vel_test_pred, alpha=0.5, s=20, color='orange')
 axes[1, 0].plot([y_vel_test.min(), y_vel_test.max()], 
                 [y_vel_test.min(), y_vel_test.max()], 'r--', lw=2)
@@ -216,7 +197,6 @@ axes[1, 0].set_title(f'Velocity Model (Weld/Inspect)\nR²={r2_vel_test:.4f}',
                      fontsize=12, fontweight='bold')
 axes[1, 0].grid(alpha=0.3)
 
-# Plot 4: Velocity Model - Residuals
 residuals_vel = y_vel_test - y_vel_test_pred
 axes[1, 1].scatter(y_vel_test_pred, residuals_vel, alpha=0.5, s=20, color='orange')
 axes[1, 1].axhline(y=0, color='r', linestyle='--', lw=2)
@@ -283,12 +263,11 @@ def calculate_task_time(joint_movements, motion_type, overlap_factor=0.7):
     total_sequential = sum([m['time'] for m in movement_times])
     actual_movement_time = max_time + (1 - overlap_factor) * (total_sequential - max_time)
     
-    # Add task-specific overhead times based on motion type
     if motion_type == 'Pick & Place':
         gripper_time = 0.5
         settling_time = 0.2
         total_overhead = gripper_time + settling_time
-    else:  # Weld & Inspect
+    else:
         setup_time = 0.3
         process_time = 1.0
         total_overhead = setup_time + process_time
@@ -313,18 +292,13 @@ print("\n" + "="*60)
 print("🤖 INTERACTIVE ROBOT MOTION PREDICTION INTERFACE")
 print("="*60)
 
-# Get available options from data - FIXED: Use integers 1-6 for Joint IDs
 available_robots = sorted(data['Robot_Model'].unique())
-available_joints = list(range(1, 7))  # Force integers 1 to 6
+available_joints = list(range(1, 7))
 available_motion_types = sorted(data['Motion_Type'].unique())
 
-# Output widget
 output = widgets.Output()
-
-# Store joint movements
 joint_movements_store = []
 
-# Main interface widgets
 interface_title = widgets.HTML(
     value="<h2 style='color: #1976D2; text-align: center;'>🤖 Robot Motion Control Predictor</h2>"
 )
@@ -391,14 +365,14 @@ add_joint_button = widgets.Button(
 )
 
 clear_joints_button = widgets.Button(
-    description='🗑️ Clear All Joints',
+    description='🗑 Clear All Joints',
     button_style='warning',
     icon='trash',
     layout=widgets.Layout(width='200px', height='35px')
 )
 
 calculate_button = widgets.Button(
-    description='⏱️ Calculate Total Time',
+    description='⏱ Calculate Total Time',
     button_style='success',
     icon='clock-o',
     layout=widgets.Layout(width='200px', height='40px')
@@ -411,25 +385,26 @@ joints_display = widgets.HTML(
 
 info_box = widgets.HTML(
     value="<div style='background-color: #E3F2FD; padding: 10px; border-radius: 5px; margin: 10px 0;'>"
-          "<b>ℹ️ Info:</b> Select Robot Model and Motion Type. Pick/Place predict <b>Position</b>, "
+          "<b>ℹ Info:</b> Select Robot Model and Motion Type. Pick/Place predict <b>Position</b>, "
           "Weld/Inspect predict <b>Velocity</b>. Add joints (1-6) to calculate task time.</div>"
 )
 
-# Update prediction type based on motion type
 def update_prediction_type(change):
     global joint_movements_store
     joint_movements_store = []
     update_joints_display()
     
     if change['new'] == 'Pick & Place':
+        # Update options first, then value
+        prediction_type.options = ['Position Prediction', 'Velocity Prediction']
         prediction_type.value = 'Position Prediction'
-        prediction_type.options = ['Position Prediction']
         info_box.value = ("<div style='background-color: #E3F2FD; padding: 10px; border-radius: 5px; margin: 10px 0;'>"
                          "<b>🎯 Pick & Place Motion:</b> This motion focuses on accurate <b>positioning</b>. "
                          "Add joints (1-6) to calculate movement time.</div>")
-    else:  # Weld & Inspect
+    else:
+        # Update options first, then value
+        prediction_type.options = ['Position Prediction', 'Velocity Prediction']
         prediction_type.value = 'Velocity Prediction'
-        prediction_type.options = ['Velocity Prediction']
         info_box.value = ("<div style='background-color: #FFF3E0; padding: 10px; border-radius: 5px; margin: 10px 0;'>"
                          "<b>⚡ Weld & Inspect Motion:</b> This motion requires precise <b>velocity control</b>. "
                          "Add joints (1-6) to calculate movement time.</div>")
@@ -445,9 +420,10 @@ def update_joints_display():
         joints_html = "<div style='background-color: #E8F5E9; padding: 10px; border-radius: 5px;'>"
         joints_html += f"<b>📋 Joint Movements Queue</b> (Robot: {joint_movements_store[0]['robot_model']}, Motion: {joint_movements_store[0]['motion_type']}):<br><br>"
         for i, jm in enumerate(joint_movements_store, 1):
-            joints_html += f"<b>{i}. Joint {jm['joint_id']}</b>: "
-            joints_html += f"{jm['current_pos']:.2f}° → {jm['target_pos']:.2f}° "
-            joints_html += f"@ {jm['velocity']:.2f}°/s<br>"
+            joints_html += f"<b>{i}. Joint {jm['joint_id']}</b>:<br>"
+            joints_html += f"   <span style='color: #666;'>Input:</span> Desired Pos: {jm['desired_pos']:.2f}°, Desired Vel: {jm['desired_vel']:.2f}°/s<br>"
+            joints_html += f"   <span style='color: #1976D2;'>Predicted:</span> Actual Pos: {jm['target_pos']:.2f}°, Actual Vel: {jm['velocity']:.2f}°/s<br>"
+            joints_html += f"   Movement: {jm['current_pos']:.2f}° → {jm['target_pos']:.2f}°<br><br>"
         joints_html += "</div>"
         joints_display.value = joints_html
 
@@ -458,7 +434,6 @@ def add_joint_movement(b):
     with output:
         clear_output(wait=True)
         
-        # Check if mixing robot models or motion types
         if joint_movements_store:
             if joint_movements_store[0]['robot_model'] != robot_model.value:
                 print("❌ Error: Cannot mix different robot models in one task!")
@@ -471,10 +446,7 @@ def add_joint_movement(b):
                 print(f"   You selected: {motion_type.value}")
                 return
         
-        # Encode robot model for prediction
         robot_model_encoded = robot_encoder.transform([robot_model.value])[0]
-        
-        # Ensure joint_id is an integer
         joint_id_int = int(joint_id.value)
         
         # Make prediction
@@ -487,7 +459,7 @@ def add_joint_movement(b):
             })
             predicted_pos = rf_position.predict(input_data)[0]
             predicted_vel = desired_velocity.value
-        else:  # Weld & Inspect
+        else:
             input_data = pd.DataFrame({
                 'Desired_Position': [desired_position.value],
                 'Desired_Velocity': [desired_velocity.value],
@@ -497,12 +469,13 @@ def add_joint_movement(b):
             predicted_vel = rf_velocity.predict(input_data)[0]
             predicted_pos = desired_position.value
         
-        # Add to store
         movement = {
             'robot_model': robot_model.value,
             'motion_type': motion_type.value,
             'joint_id': joint_id_int,
             'current_pos': current_position.value,
+            'desired_pos': desired_position.value,
+            'desired_vel': desired_velocity.value,
             'target_pos': predicted_pos,
             'velocity': abs(predicted_vel) if predicted_vel != 0 else 1.0
         }
@@ -510,12 +483,27 @@ def add_joint_movement(b):
         
         update_joints_display()
         
-        print(f"✅ Added Joint {joint_id_int} movement to queue!")
-        print(f"   Robot Model: {robot_model.value}")
-        print(f"   Motion Type: {motion_type.value}")
-        print(f"   Current: {current_position.value:.2f}° → Target: {predicted_pos:.2f}°")
-        print(f"   Velocity: {movement['velocity']:.2f}°/s")
-        print(f"\n📊 Total joints in queue: {len(joint_movements_store)}")
+        print(f"✅ Joint {joint_id_int} movement added successfully!")
+        print(f"\n📥 INPUT VALUES:")
+        print(f"   • Robot Model: {robot_model.value}")
+        print(f"   • Motion Type: {motion_type.value}")
+        print(f"   • Joint ID: {joint_id_int}")
+        print(f"   • Current Position: {current_position.value:.2f}°")
+        print(f"   • Desired Position: {desired_position.value:.2f}°")
+        print(f"   • Desired Velocity: {desired_velocity.value:.2f}°/s")
+        
+        print(f"\n🔮 PREDICTED VALUES:")
+        print(f"   • Predicted Actual Position: {predicted_pos:.2f}°")
+        print(f"   • Predicted Actual Velocity: {movement['velocity']:.2f}°/s")
+        
+        position_error = abs(predicted_pos - desired_position.value)
+        velocity_error = abs(movement['velocity'] - desired_velocity.value)
+        
+        print(f"\n📊 PREDICTION ACCURACY:")
+        print(f"   • Position Error: {position_error:.4f}° ({(position_error/abs(desired_position.value)*100) if desired_position.value != 0 else 0:.2f}%)")
+        print(f"   • Velocity Error: {velocity_error:.4f}°/s ({(velocity_error/abs(desired_velocity.value)*100) if desired_velocity.value != 0 else 0:.2f}%)")
+        
+        print(f"\n📋 Total joints in queue: {len(joint_movements_store)}")
 
 def clear_joints(b):
     """Clear all joint movements"""
@@ -525,7 +513,7 @@ def clear_joints(b):
     
     with output:
         clear_output(wait=True)
-        print("🗑️ All joint movements cleared!")
+        print("🗑 All joint movements cleared!")
 
 def calculate_total_time(b):
     """Calculate total task time"""
@@ -537,10 +525,9 @@ def calculate_total_time(b):
             return
         
         print("\n" + "="*70)
-        print("⏱️  TASK TIME ESTIMATION REPORT")
+        print("⏱  TASK TIME ESTIMATION REPORT")
         print("="*70)
         
-        # Calculate total time
         total_time, breakdown = calculate_task_time(
             joint_movements_store,
             joint_movements_store[0]['motion_type'],
@@ -553,7 +540,7 @@ def calculate_total_time(b):
         print(f"  • Number of Joints: {len(joint_movements_store)}")
         print(f"  • Parallel Execution: 70% (joints move simultaneously)")
         
-        print(f"\n⏱️  TIME BREAKDOWN:")
+        print(f"\n⏱  TIME BREAKDOWN:")
         print(f"  • Pure Movement Time: {breakdown['movement_time']:.3f} seconds")
         print(f"  • Task Overhead Time: {breakdown['overhead_time']:.3f} seconds")
         print(f"  • Longest Joint Movement: {breakdown['max_joint_time']:.3f} seconds")
@@ -565,10 +552,11 @@ def calculate_total_time(b):
         print("-" * 70)
         for i, jm in enumerate(breakdown['joint_details'], 1):
             print(f"\n{i}. Joint {joint_movements_store[i-1]['joint_id']}:")
+            print(f"   Input: Desired Pos: {joint_movements_store[i-1]['desired_pos']:.2f}°, Desired Vel: {joint_movements_store[i-1]['desired_vel']:.2f}°/s")
+            print(f"   Predicted: Actual Pos: {joint_movements_store[i-1]['target_pos']:.2f}°, Actual Vel: {joint_movements_store[i-1]['velocity']:.2f}°/s")
             print(f"   • Movement: {joint_movements_store[i-1]['current_pos']:.2f}° → "
                   f"{joint_movements_store[i-1]['target_pos']:.2f}°")
             print(f"   • Distance: {jm['distance']:.2f}°")
-            print(f"   • Velocity: {joint_movements_store[i-1]['velocity']:.2f}°/s")
             print(f"   • Time: {jm['time']:.3f}s "
                   f"(Accel: {jm['phases']['acceleration']:.3f}s, "
                   f"Constant: {jm['phases']['constant_velocity']:.3f}s, "
@@ -576,14 +564,12 @@ def calculate_total_time(b):
         
         print("\n" + "="*70)
         
-        # Time efficiency analysis
         efficiency = (breakdown['max_joint_time'] / breakdown['sequential_time']) * 100
         print(f"\n📈 EFFICIENCY ANALYSIS:")
         print(f"  • Time saved by parallel execution: "
               f"{breakdown['sequential_time'] - breakdown['movement_time']:.3f} seconds")
         print(f"  • Efficiency gain: {100 - efficiency:.1f}%")
         
-        # Performance rating
         if total_time < 2.0:
             rating = "⚡ VERY FAST"
         elif total_time < 4.0:
@@ -591,7 +577,7 @@ def calculate_total_time(b):
         elif total_time < 6.0:
             rating = "✓ MODERATE"
         elif total_time < 10.0:
-            rating = "⚠️ SLOW"
+            rating = "⚠ SLOW"
         else:
             rating = "❌ VERY SLOW"
         
@@ -601,7 +587,6 @@ add_joint_button.on_click(add_joint_movement)
 clear_joints_button.on_click(clear_joints)
 calculate_button.on_click(calculate_total_time)
 
-# Layout
 button_row = widgets.HBox([add_joint_button, clear_joints_button], 
                           layout=widgets.Layout(justify_content='space-between'))
 
@@ -630,8 +615,8 @@ main_interface = widgets.VBox([
     output
 ], layout=widgets.Layout(padding='10px'))
 
-# Display interface
 display(main_interface)
 
 print("\n✨ Interactive interface ready!")
 print("💡 Select Robot Model and Motion Type, then add joints (1-6) to calculate task time.")
+print("📊 Input values and predicted actual values will be displayed when you add each joint.")
