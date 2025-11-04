@@ -1,0 +1,638 @@
+import pandas as pd
+import numpy as np
+from sklearn.ensemble import RandomForestRegressor
+from sklearn.metrics import r2_score, mean_squared_error
+from sklearn.model_selection import train_test_split
+from sklearn.preprocessing import LabelEncoder
+import matplotlib.pyplot as plt
+import ipywidgets as widgets
+from IPython.display import display, clear_output
+
+# ===========================
+# IMPROVED FORWARD KINEMATICS WITH DH PARAMETERS
+# ===========================
+
+class RobotKinematics:
+    """Enhanced robot kinematics with proper DH parameters"""
+    
+    def __init__(self, robot_model):
+        self.robot_model = robot_model
+        # Define DH parameters for different robot models
+        self.dh_params = self.get_dh_parameters(robot_model)
+    
+    def get_dh_parameters(self, robot_model):
+        """
+        Get DH parameters [a, alpha, d, theta_offset] for each joint
+        Using more realistic parameters
+        """
+        # Compact 6-DOF robot arm DH parameters (smaller errors expected)
+        if "ABB" in robot_model:
+            return [
+                [0, -np.pi/2, 0.15, 0],      # Joint 1 - base rotation
+                [0.25, 0, 0, 0],             # Joint 2 - shoulder
+                [0.25, 0, 0, 0],             # Joint 3 - elbow
+                [0, -np.pi/2, 0.3, 0],       # Joint 4 - wrist roll
+                [0, np.pi/2, 0, 0],          # Joint 5 - wrist pitch
+                [0, 0, 0.08, 0]              # Joint 6 - wrist yaw
+            ]
+        elif "KUKA" in robot_model:
+            return [
+                [0, -np.pi/2, 0.2, 0],
+                [0.3, 0, 0, 0],
+                [0.3, 0, 0, 0],
+                [0, -np.pi/2, 0.35, 0],
+                [0, np.pi/2, 0, 0],
+                [0, 0, 0.1, 0]
+            ]
+        else:  # Default/Generic - smaller, more precise
+            return [
+                [0, -np.pi/2, 0.18, 0],
+                [0.28, 0, 0, 0],
+                [0.28, 0, 0, 0],
+                [0, -np.pi/2, 0.32, 0],
+                [0, np.pi/2, 0, 0],
+                [0, 0, 0.09, 0]
+            ]
+    
+    def dh_transform(self, a, alpha, d, theta):
+        """Create transformation matrix using DH parameters"""
+        ct, st = np.cos(theta), np.sin(theta)
+        ca, sa = np.cos(alpha), np.sin(alpha)
+        
+        return np.array([
+            [ct, -st*ca, st*sa, a*ct],
+            [st, ct*ca, -ct*sa, a*st],
+            [0, sa, ca, d],
+            [0, 0, 0, 1]
+        ])
+    
+    def forward_kinematics(self, joint_angles):
+        """
+        Calculate FK using DH parameters
+        joint_angles: dict {1: angle1, 2: angle2, ...} in degrees
+        Returns: end_effector_pos, all_joint_positions
+        """
+        # Convert to radians
+        angles_rad = {k: np.radians(v) for k, v in joint_angles.items()}
+        
+        T = np.eye(4)  # Start with identity
+        joint_positions = [(0, 0, 0)]  # Base position
+        
+        for i in range(6):
+            joint_id = i + 1
+            a, alpha, d, theta_offset = self.dh_params[i]
+            
+            # Get joint angle (or 0 if not specified)
+            theta = angles_rad.get(joint_id, 0) + theta_offset
+            
+            # Apply DH transformation
+            T_i = self.dh_transform(a, alpha, d, theta)
+            T = T @ T_i
+            
+            # Store joint position
+            joint_positions.append((T[0, 3], T[1, 3], T[2, 3]))
+        
+        end_pos = (T[0, 3], T[1, 3], T[2, 3])
+        return end_pos, joint_positions, T
+
+# ===========================
+# LOAD AND PREPARE DATA
+# ===========================
+url = "https://raw.githubusercontent.com/cr1825/ai-project-data-sheet/main/EdgeAI_Robot_Motion_Control_Dataset_expanded_5k.csv"
+data = pd.read_csv(url)
+
+print("✅ Data Loaded Successfully")
+print("Shape:", data.shape)
+
+# Encode robot models
+robot_encoder = LabelEncoder()
+data['Robot_Model_Encoded'] = robot_encoder.fit_transform(data['Robot_Model'])
+
+# Separate data
+pick_place_data = data[data['Motion_Type'].isin(['Pick', 'Place'])].copy()
+weld_inspect_data = data[data['Motion_Type'].isin(['Weld', 'Inspect'])].copy()
+
+print(f"\n📊 Data Distribution:")
+print(f"  • Pick/Place samples: {len(pick_place_data)}")
+print(f"  • Weld/Inspect samples: {len(weld_inspect_data)}")
+
+# ===========================
+# TRAIN MODELS
+# ===========================
+print("\n🚀 Training Models...")
+
+# Position Model
+X_position = pick_place_data[['Desired_Position', 'Desired_Velocity', 'Joint_ID', 'Robot_Model_Encoded']]
+y_position = pick_place_data['Actual_Position']
+X_pos_train, X_pos_test, y_pos_train, y_pos_test = train_test_split(
+    X_position, y_position, test_size=0.2, random_state=42
+)
+rf_position = RandomForestRegressor(n_estimators=300, max_depth=25, random_state=42, n_jobs=-1)
+rf_position.fit(X_pos_train, y_pos_train)
+
+# Velocity Model
+X_velocity = weld_inspect_data[['Desired_Position', 'Desired_Velocity', 'Joint_ID', 'Robot_Model_Encoded']]
+y_velocity = weld_inspect_data['Actual_Velocity']
+X_vel_train, X_vel_test, y_vel_train, y_vel_test = train_test_split(
+    X_velocity, y_velocity, test_size=0.2, random_state=42
+)
+rf_velocity = RandomForestRegressor(n_estimators=300, max_depth=25, random_state=42, n_jobs=-1)
+rf_velocity.fit(X_vel_train, y_vel_train)
+
+print("✅ Models Trained")
+
+# ===========================
+# DIAGNOSTIC ANALYSIS
+# ===========================
+def analyze_prediction_accuracy(data_subset, model, feature_cols, target_col, model_name):
+    """Analyze model prediction accuracy"""
+    X = data_subset[feature_cols]
+    y_true = data_subset[target_col]
+    y_pred = model.predict(X)
+    
+    r2 = r2_score(y_true, y_pred)
+    rmse = np.sqrt(mean_squared_error(y_true, y_pred))
+    mae = np.mean(np.abs(y_true - y_pred))
+    
+    print(f"\n📊 {model_name} Accuracy Analysis:")
+    print(f"  R² Score: {r2:.4f}")
+    print(f"  RMSE: {rmse:.4f}")
+    print(f"  MAE: {mae:.4f}")
+    print(f"  Mean Absolute % Error: {(mae/np.mean(np.abs(y_true))*100):.2f}%")
+    
+    return r2, rmse, mae
+
+# Analyze both models
+feature_cols = ['Desired_Position', 'Desired_Velocity', 'Joint_ID', 'Robot_Model_Encoded']
+analyze_prediction_accuracy(pick_place_data, rf_position, feature_cols, 'Actual_Position', 'Position Model')
+analyze_prediction_accuracy(weld_inspect_data, rf_velocity, feature_cols, 'Actual_Velocity', 'Velocity Model')
+
+# ===========================
+# TIME CALCULATION FUNCTIONS
+# ===========================
+def calculate_movement_time(start_pos, end_pos, velocity, acceleration=15.0, deceleration=15.0):
+    """
+    Calculate time for a joint to move from start to end position
+    Uses trapezoidal velocity profile
+    """
+    distance = abs(end_pos - start_pos)
+    
+    if distance == 0:
+        return 0, {'acceleration': 0, 'constant_velocity': 0, 'deceleration': 0}
+    
+    # Time to reach max velocity
+    t_accel = velocity / acceleration
+    t_decel = velocity / deceleration
+    
+    # Distance covered during acceleration and deceleration
+    d_accel = 0.5 * acceleration * t_accel**2
+    d_decel = 0.5 * deceleration * t_decel**2
+    
+    # Check if we reach maximum velocity
+    if (d_accel + d_decel) >= distance:
+        # Triangular profile - never reach max velocity
+        v_peak = np.sqrt(2 * distance * acceleration * deceleration / (acceleration + deceleration))
+        t_accel = v_peak / acceleration
+        t_decel = v_peak / deceleration
+        t_constant = 0
+    else:
+        # Trapezoidal profile - reach and maintain max velocity
+        d_constant = distance - d_accel - d_decel
+        t_constant = d_constant / velocity
+    
+    total_time = t_accel + t_constant + t_decel
+    
+    phases = {
+        'acceleration': t_accel,
+        'constant_velocity': t_constant,
+        'deceleration': t_decel
+    }
+    
+    return total_time, phases
+
+def calculate_task_time(joint_movements, motion_type, overlap_factor=0.7):
+    """
+    Calculate total task time considering parallel joint movements
+    overlap_factor: 0 = sequential, 1 = fully parallel
+    """
+    movement_times = []
+    
+    for jm in joint_movements:
+        time, phases = calculate_movement_time(
+            jm['desired_pos'],
+            jm['predicted_actual_pos'],
+            jm['predicted_actual_vel']
+        )
+        movement_times.append({
+            'joint_id': jm['joint_id'],
+            'time': time,
+            'phases': phases,
+            'distance': abs(jm['predicted_actual_pos'] - jm['desired_pos'])
+        })
+    
+    # Calculate parallel execution time
+    if movement_times:
+        max_time = max([m['time'] for m in movement_times])
+        total_sequential = sum([m['time'] for m in movement_times])
+        # Actual time considering overlap
+        actual_movement_time = max_time + (1 - overlap_factor) * (total_sequential - max_time)
+    else:
+        max_time = 0
+        total_sequential = 0
+        actual_movement_time = 0
+    
+    # Add task-specific overhead
+    if motion_type == 'Pick & Place':
+        gripper_open_close = 0.4
+        settling_time = 0.3
+        total_overhead = gripper_open_close + settling_time
+    else:  # Weld & Inspect
+        setup_time = 0.2
+        process_time = 0.8
+        total_overhead = setup_time + process_time
+    
+    total_time = actual_movement_time + total_overhead
+    
+    breakdown = {
+        'movement_time': actual_movement_time,
+        'overhead_time': total_overhead,
+        'max_joint_time': max_time,
+        'sequential_time': total_sequential,
+        'overlap_factor': overlap_factor,
+        'joint_details': movement_times
+    }
+    
+    return total_time, breakdown
+
+# ===========================
+# IMPROVED INTERACTIVE INTERFACE
+# ===========================
+print("\n" + "="*70)
+print("🤖 CORRECTED INTERFACE: DESIRED vs PREDICTED ACTUAL")
+print("="*70)
+
+output = widgets.Output()
+joint_movements_store = []
+
+robot_model = widgets.Dropdown(
+    options=sorted(data['Robot_Model'].unique()),
+    description='Robot Model:',
+    style={'description_width': '150px'},
+    layout=widgets.Layout(width='400px')
+)
+
+motion_type = widgets.Dropdown(
+    options=['Pick & Place', 'Weld & Inspect'],
+    value='Pick & Place',
+    description='Motion Type:',
+    style={'description_width': '150px'},
+    layout=widgets.Layout(width='400px')
+)
+
+joint_id = widgets.Dropdown(
+    options=list(range(1, 7)),
+    value=1,
+    description='Joint ID:',
+    style={'description_width': '150px'},
+    layout=widgets.Layout(width='400px')
+)
+
+desired_position = widgets.FloatText(
+    value=45.0,
+    description='Desired Pos (°):',
+    style={'description_width': '150px'},
+    layout=widgets.Layout(width='400px')
+)
+
+desired_velocity = widgets.FloatText(
+    value=2.0,
+    description='Desired Vel (°/s):',
+    style={'description_width': '150px'},
+    layout=widgets.Layout(width='400px')
+)
+
+add_joint_button = widgets.Button(
+    description='➕ Add Joint',
+    button_style='info',
+    layout=widgets.Layout(width='150px')
+)
+
+clear_button = widgets.Button(
+    description='🗑 Clear',
+    button_style='warning',
+    layout=widgets.Layout(width='150px')
+)
+
+analyze_button = widgets.Button(
+    description='📊 Analyze Configuration',
+    button_style='success',
+    layout=widgets.Layout(width='300px')
+)
+
+info_box = widgets.HTML(
+    value="<div style='background-color: #E3F2FD; padding: 10px; border-radius: 5px;'>"
+          "<b>💡 How it works:</b><br>"
+          "• <b>Desired Position</b> = What you WANT the joint to move to<br>"
+          "• <b>Predicted Actual Position</b> = What the ML model predicts will ACTUALLY happen<br>"
+          "• <b>Error</b> = Difference between desired and predicted actual positions<br>"
+          "• FK calculates 3D coordinates for both scenarios</div>"
+)
+
+joints_display = widgets.HTML(value="<b>📋 Joint Queue:</b> (Empty)")
+
+def add_joint_movement(b):
+    global joint_movements_store
+    
+    with output:
+        clear_output(wait=True)
+        
+        # Encode robot model
+        robot_encoded = robot_encoder.transform([robot_model.value])[0]
+        
+        # Make prediction
+        input_df = pd.DataFrame({
+            'Desired_Position': [desired_position.value],
+            'Desired_Velocity': [desired_velocity.value],
+            'Joint_ID': [joint_id.value],
+            'Robot_Model_Encoded': [robot_encoded]
+        })
+        
+        if motion_type.value == 'Pick & Place':
+            predicted_actual_pos = rf_position.predict(input_df)[0]
+            predicted_actual_vel = desired_velocity.value  # Velocity not predicted in Pick&Place
+        else:
+            predicted_actual_pos = desired_position.value  # Position not predicted in Weld&Inspect
+            predicted_actual_vel = rf_velocity.predict(input_df)[0]
+        
+        movement = {
+            'robot_model': robot_model.value,
+            'motion_type': motion_type.value,  # Store motion type
+            'joint_id': joint_id.value,
+            'desired_pos': desired_position.value,
+            'predicted_actual_pos': predicted_actual_pos,
+            'desired_vel': desired_velocity.value,
+            'predicted_actual_vel': abs(predicted_actual_vel) if predicted_actual_vel != 0 else 1.0
+        }
+        joint_movements_store.append(movement)
+        
+        # Update display
+        html = f"<div style='background-color: #E8F5E9; padding: 10px; border-radius: 5px;'>"
+        html += f"<b>📋 Joints Added: {len(joint_movements_store)}</b><br><br>"
+        for jm in joint_movements_store:
+            error = abs(jm['predicted_actual_pos'] - jm['desired_pos'])
+            html += f"<b>J{jm['joint_id']}:</b> Desired {jm['desired_pos']:.1f}° → Predicted Actual {jm['predicted_actual_pos']:.1f}° "
+            html += f"<span style='color: {'red' if error > 1 else 'green'};'>(Δ{error:.2f}°)</span><br>"
+        html += "</div>"
+        joints_display.value = html
+        
+        position_error = abs(predicted_actual_pos - desired_position.value)
+        velocity_error = abs(predicted_actual_vel - desired_velocity.value)
+        
+        print(f"✅ Joint {joint_id.value} added successfully!")
+        print(f"\n📥 INPUT (What you WANT):")
+        print(f"  • Desired Position: {desired_position.value:.2f}°")
+        print(f"  • Desired Velocity: {desired_velocity.value:.2f}°/s")
+        print(f"\n🔮 PREDICTION (What will ACTUALLY happen):")
+        print(f"  • Predicted Actual Position: {predicted_actual_pos:.2f}°")
+        print(f"  • Predicted Actual Velocity: {predicted_actual_vel:.2f}°/s")
+        print(f"\n❌ PREDICTION ERROR:")
+        print(f"  • Position Error: {position_error:.4f}° ({position_error/abs(desired_position.value)*100:.2f}%)")
+        print(f"  • Velocity Error: {velocity_error:.4f}°/s ({velocity_error/abs(desired_velocity.value)*100:.2f}%)")
+
+def clear_joints(b):
+    global joint_movements_store
+    joint_movements_store = []
+    joints_display.value = "<b>📋 Joint Queue:</b> (Empty)"
+    with output:
+        clear_output(wait=True)
+        print("🗑 Cleared!")
+
+def analyze_configuration(b):
+    with output:
+        clear_output(wait=True)
+        
+        if not joint_movements_store:
+            print("❌ No joints added!")
+            return
+        
+        print("\n" + "="*70)
+        print("📊 COMPLETE ROBOT MOTION ANALYSIS")
+        print("="*70)
+        
+        # Create robot kinematics object
+        robot_kin = RobotKinematics(joint_movements_store[0]['robot_model'])
+        
+        # Build joint angle dictionaries
+        # DESIRED configuration (what we want)
+        desired_angles = {}
+        # PREDICTED ACTUAL configuration (what will actually happen)
+        predicted_actual_angles = {}
+        
+        for jm in joint_movements_store:
+            desired_angles[jm['joint_id']] = jm['desired_pos']
+            predicted_actual_angles[jm['joint_id']] = jm['predicted_actual_pos']
+        
+        # Calculate FK for both configurations
+        desired_end, desired_joints, T_desired = robot_kin.forward_kinematics(desired_angles)
+        predicted_end, predicted_joints, T_predicted = robot_kin.forward_kinematics(predicted_actual_angles)
+        
+        # Calculate errors
+        cartesian_error = np.sqrt(sum([(p-d)**2 for p, d in zip(predicted_end, desired_end)]))
+        
+        # Calculate time
+        motion_type_str = joint_movements_store[0].get('motion_type', 'Pick & Place')
+        total_time, time_breakdown = calculate_task_time(joint_movements_store, motion_type_str)
+        
+        print(f"\n🤖 Robot: {joint_movements_store[0]['robot_model']}")
+        print(f"🎯 Motion Type: {motion_type_str}")
+        print(f"🔧 Joints Configured: {sorted(desired_angles.keys())}")
+        print(f"📏 Link Configuration: {[f'{p[0]:.3f}' for p in robot_kin.dh_params]}")
+        
+        print(f"\n" + "="*70)
+        print("🎯 DESIRED CONFIGURATION (Target/Goal)")
+        print("="*70)
+        print(f"  Joint Angles (what we WANT): {', '.join([f'J{k}:{v:.2f}°' for k, v in sorted(desired_angles.items())])}")
+        print(f"  End-Effector Position (where we WANT to be):")
+        print(f"    X = {desired_end[0]:.6f} m")
+        print(f"    Y = {desired_end[1]:.6f} m")
+        print(f"    Z = {desired_end[2]:.6f} m")
+        print(f"  Reach from base: {np.sqrt(sum([x**2 for x in desired_end])):.6f} m")
+        
+        print(f"\n" + "="*70)
+        print("🔮 PREDICTED ACTUAL CONFIGURATION (What will really happen)")
+        print("="*70)
+        print(f"  Joint Angles (what we'll ACTUALLY get): {', '.join([f'J{k}:{v:.2f}°' for k, v in sorted(predicted_actual_angles.items())])}")
+        print(f"  End-Effector Position (where we'll ACTUALLY be):")
+        print(f"    X = {predicted_end[0]:.6f} m")
+        print(f"    Y = {predicted_end[1]:.6f} m")
+        print(f"    Z = {predicted_end[2]:.6f} m")
+        print(f"  Reach from base: {np.sqrt(sum([x**2 for x in predicted_end])):.6f} m")
+        
+        print(f"\n" + "="*70)
+        print("📏 CARTESIAN POSITION ERROR (Desired vs Predicted Actual)")
+        print("="*70)
+        print(f"  Total 3D Distance Error: {cartesian_error:.6f} m = {cartesian_error*1000:.3f} mm")
+        print(f"  Error Breakdown:")
+        print(f"    ΔX = {abs(predicted_end[0] - desired_end[0]):.6f} m = {abs(predicted_end[0] - desired_end[0])*1000:.3f} mm")
+        print(f"    ΔY = {abs(predicted_end[1] - desired_end[1]):.6f} m = {abs(predicted_end[1] - desired_end[1])*1000:.3f} mm")
+        print(f"    ΔZ = {abs(predicted_end[2] - desired_end[2]):.6f} m = {abs(predicted_end[2] - desired_end[2])*1000:.3f} mm")
+        
+        print(f"\n📊 JOINT-SPACE ERRORS:")
+        print("-" * 70)
+        total_joint_error = 0
+        for jm in joint_movements_store:
+            joint_error = abs(jm['predicted_actual_pos'] - jm['desired_pos'])
+            total_joint_error += joint_error
+            print(f"  Joint {jm['joint_id']}: {jm['desired_pos']:.2f}° → {jm['predicted_actual_pos']:.2f}° "
+                  f"(Error: {joint_error:.4f}° = {joint_error*100:.2f}%)")
+        
+        avg_joint_error = total_joint_error / len(joint_movements_store)
+        print(f"\n  Average Joint Error: {avg_joint_error:.4f}°")
+        print(f"  Total Joint Error Sum: {total_joint_error:.4f}°")
+        
+        # TIME ANALYSIS
+        print(f"\n" + "="*70)
+        print("⏱️  TIME ANALYSIS (Movement Duration)")
+        print("="*70)
+        
+        print(f"\n📋 TASK CONFIGURATION:")
+        print(f"  • Motion Type: {motion_type_str}")
+        print(f"  • Number of Joints: {len(joint_movements_store)}")
+        print(f"  • Parallel Execution: {time_breakdown['overlap_factor']*100:.0f}% (joints move simultaneously)")
+        
+        print(f"\n⏲️  INDIVIDUAL JOINT MOVEMENT TIMES:")
+        print("-" * 70)
+        for i, jm in enumerate(joint_movements_store):
+            time_detail = time_breakdown['joint_details'][i]
+            print(f"\n  Joint {jm['joint_id']}:")
+            print(f"    Movement: {jm['desired_pos']:.2f}° → {jm['predicted_actual_pos']:.2f}°")
+            print(f"    Distance: {time_detail['distance']:.2f}°")
+            print(f"    Velocity: {jm['predicted_actual_vel']:.2f}°/s")
+            print(f"    Total Time: {time_detail['time']:.3f}s")
+            print(f"      └─ Acceleration: {time_detail['phases']['acceleration']:.3f}s")
+            print(f"      └─ Constant Vel: {time_detail['phases']['constant_velocity']:.3f}s")
+            print(f"      └─ Deceleration: {time_detail['phases']['deceleration']:.3f}s")
+        
+        print(f"\n⏱️  TOTAL TIME BREAKDOWN:")
+        print(f"  • Pure Movement Time: {time_breakdown['movement_time']:.3f}s")
+        print(f"  • Task Overhead Time: {time_breakdown['overhead_time']:.3f}s")
+        if motion_type_str == 'Pick & Place':
+            print(f"    └─ Gripper Operation: 0.400s")
+            print(f"    └─ Settling Time: 0.300s")
+        else:
+            print(f"    └─ Setup Time: 0.200s")
+            print(f"    └─ Process Time: 0.800s")
+        print(f"  • Longest Single Joint: {time_breakdown['max_joint_time']:.3f}s")
+        print(f"  • If Sequential (no overlap): {time_breakdown['sequential_time']:.3f}s")
+        
+        print(f"\n🎯 TOTAL ESTIMATED TIME: {total_time:.3f} seconds = {total_time/60:.2f} minutes")
+        
+        time_saved = time_breakdown['sequential_time'] - time_breakdown['movement_time']
+        efficiency = (time_breakdown['max_joint_time'] / time_breakdown['sequential_time']) * 100 if time_breakdown['sequential_time'] > 0 else 100
+        
+        print(f"\n📈 EFFICIENCY METRICS:")
+        print(f"  • Time saved by parallel execution: {time_saved:.3f}s ({time_saved/time_breakdown['sequential_time']*100 if time_breakdown['sequential_time'] > 0 else 0:.1f}%)")
+        print(f"  • Parallel efficiency: {efficiency:.1f}%")
+        print(f"  • Speed improvement: {time_breakdown['sequential_time']/total_time if total_time > 0 else 1:.2f}x faster")
+        
+        # Performance rating
+        if total_time < 1.5:
+            rating = "⚡ VERY FAST"
+            rating_color = "green"
+        elif total_time < 3.0:
+            rating = "✅ FAST"
+            rating_color = "green"
+        elif total_time < 5.0:
+            rating = "✓ MODERATE"
+            rating_color = "orange"
+        elif total_time < 8.0:
+            rating = "⚠️  SLOW"
+            rating_color = "orange"
+        else:
+            rating = "❌ VERY SLOW"
+            rating_color = "red"
+        
+        print(f"\n🏆 Performance Rating: {rating}")
+        
+        print(f"\n⚠️  ACCURACY ASSESSMENT:")
+        if cartesian_error < 0.001:
+            assessment = "✅ EXCELLENT - Sub-millimeter accuracy (< 1mm)"
+            color = "green"
+        elif cartesian_error < 0.005:
+            assessment = "✅ GOOD - High precision (1-5mm)"
+            color = "green"
+        elif cartesian_error < 0.01:
+            assessment = "⚠️  ACCEPTABLE - Moderate precision (5-10mm)"
+            color = "orange"
+        elif cartesian_error < 0.05:
+            assessment = "⚠️  FAIR - Low precision (10-50mm)"
+            color = "orange"
+        else:
+            assessment = "❌ POOR - Very low precision (> 50mm)"
+            color = "red"
+        
+        print(f"  {assessment}")
+        
+        print(f"\n💡 INTERPRETATION:")
+        print(f"  • Joint-space errors compound when transformed to Cartesian space")
+        print(f"  • Average joint error of {avg_joint_error:.2f}° results in {cartesian_error*1000:.1f}mm end-effector error")
+        print(f"  • Error amplification factor: {(cartesian_error*1000)/avg_joint_error if avg_joint_error > 0 else 0:.2f}x")
+        print(f"  • This is {'better' if cartesian_error < 0.01 else 'worse'} than typical industrial robot repeatability (±0.1mm)")
+        print(f"  • Movement completes in {total_time:.2f}s with {efficiency:.0f}% parallel efficiency")
+        
+        print(f"\n🔧 RECOMMENDATIONS:")
+        if cartesian_error > 0.01:
+            print("  • Joint prediction errors are compounding in Cartesian space")
+            print("  • Consider calibrating the ML model with more training data")
+            print("  • Verify DH parameters match your actual robot specifications")
+            print("  • Add joint angle feedback correction mechanisms")
+        
+        if total_time > 5.0:
+            print("  • Movement time is high - consider increasing joint velocities")
+            print("  • Optimize motion paths to reduce joint travel distances")
+            print("  • Check if all joints need to move or if some can stay fixed")
+        
+        if efficiency < 80:
+            print("  • Low parallel efficiency - joints have very different movement times")
+            print("  • Consider re-balancing the motion profile across joints")
+        
+        print(f"\n🗺️ WORKSPACE ANALYSIS:")
+        max_reach = sum([abs(p[0]) for p in robot_kin.dh_params])  # Sum of link lengths
+        desired_reach = np.sqrt(desired_end[0]**2 + desired_end[1]**2 + desired_end[2]**2)
+        predicted_reach = np.sqrt(predicted_end[0]**2 + predicted_end[1]**2 + predicted_end[2]**2)
+        
+        print(f"  • Maximum Theoretical Reach: {max_reach:.4f} m")
+        print(f"  • Desired Configuration Reach: {desired_reach:.4f} m ({(desired_reach/max_reach*100):.1f}% of max)")
+        print(f"  • Predicted Configuration Reach: {predicted_reach:.4f} m ({(predicted_reach/max_reach*100):.1f}% of max)")
+        print(f"  • Working at {'full extension' if desired_reach > max_reach*0.8 else 'comfortable range'}")
+        
+        print(f"\n" + "="*70)
+        print(f"✅ ANALYSIS COMPLETE")
+        print("="*70)
+
+add_joint_button.on_click(add_joint_movement)
+clear_button.on_click(clear_joints)
+analyze_button.on_click(analyze_configuration)
+
+interface = widgets.VBox([
+    widgets.HTML("<h3>🤖 Robot Motion Analysis: Desired vs Predicted Actual</h3>"),
+    info_box,
+    robot_model,
+    motion_type,
+    joint_id,
+    desired_position,
+    desired_velocity,
+    widgets.HBox([add_joint_button, clear_button]),
+    joints_display,
+    analyze_button,
+    output
+], layout=widgets.Layout(padding='20px', border='2px solid #1976D2'))
+
+display(interface)
+
+print("\n✅ CORRECTED interface ready!")
+print("\n💡 KEY CONCEPT:")
+print("  • DESIRED angles → Where you WANT the robot to go (your command)")
+print("  • PREDICTED ACTUAL angles → Where it will REALLY go (ML prediction)")
+print("  • The difference between these is the position ERROR")
+print("  • FK shows how joint errors translate to 3D Cartesian errors")
